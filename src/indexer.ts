@@ -3,19 +3,36 @@ import { getLastIndexedBlock, setLastIndexedBlock } from './db.js';
 import { isTransferEvent, handleTransfer } from './handlers/transfer.js';
 import { isMarketplaceEvent, handleMarketplaceEvent } from './handlers/marketplace.js';
 import { isAuctionEvent, handleAuctionEvent } from './handlers/auction.js';
+import { isCollectionFactoryEvent, handleCollectionCreated } from './handlers/collection.js';
 
 const POLL_INTERVAL_MS = 2_000;
 const BATCH_SIZE = 50;
 
+export interface IndexerOptions {
+  marketplaceAddress: string;
+  auctionAddress: string;
+  collectionFactoryAddress: string;
+  startBlock: number;
+}
+
 export async function startIndexer(
   provider: ethers.JsonRpcProvider,
-  marketplaceAddress: string,
-  auctionAddress: string,
+  options: IndexerOptions,
 ): Promise<void> {
+  const { marketplaceAddress, auctionAddress, collectionFactoryAddress, startBlock } = options;
+
   console.log('[indexer] starting block polling loop');
+  console.log(`[indexer] marketplace: ${marketplaceAddress || '(not set)'}`);
+  console.log(`[indexer] auction: ${auctionAddress || '(not set)'}`);
+  console.log(`[indexer] collection factory: ${collectionFactoryAddress || '(not set)'}`);
 
   let lastBlock = await getLastIndexedBlock();
-  console.log(`[indexer] resuming from block ${lastBlock + 1}`);
+  if (lastBlock < 0 && startBlock > 0) {
+    lastBlock = startBlock - 1;
+    console.log(`[indexer] no checkpoint found, starting from configured START_BLOCK ${startBlock}`);
+  } else {
+    console.log(`[indexer] resuming from block ${lastBlock + 1}`);
+  }
 
   while (true) {
     try {
@@ -29,7 +46,7 @@ export async function startIndexer(
       const fromBlock = lastBlock + 1;
       const toBlock = Math.min(fromBlock + BATCH_SIZE - 1, latestBlock);
 
-      await processBlockRange(provider, fromBlock, toBlock, marketplaceAddress, auctionAddress);
+      await processBlockRange(provider, fromBlock, toBlock, marketplaceAddress, auctionAddress, collectionFactoryAddress);
 
       lastBlock = toBlock;
       await setLastIndexedBlock(toBlock);
@@ -52,6 +69,7 @@ async function processBlockRange(
   toBlock: number,
   marketplaceAddress: string,
   auctionAddress: string,
+  collectionFactoryAddress: string,
 ): Promise<void> {
   const logs = await provider.getLogs({ fromBlock, toBlock });
 
@@ -68,7 +86,9 @@ async function processBlockRange(
       }
       const timestamp = blockTimestamps.get(log.blockNumber)!;
 
-      if (isTransferEvent(log)) {
+      if (isCollectionFactoryEvent(log, collectionFactoryAddress)) {
+        await handleCollectionCreated(log, timestamp);
+      } else if (isTransferEvent(log)) {
         await handleTransfer(log, timestamp, provider);
       } else if (isMarketplaceEvent(log, marketplaceAddress)) {
         await handleMarketplaceEvent(log, timestamp);

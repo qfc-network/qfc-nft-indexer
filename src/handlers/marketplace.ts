@@ -7,23 +7,27 @@ import {
   updateCollectionStats,
 } from '../db.js';
 
-const LISTED_TOPIC = ethers.id('Listed(address,uint256,address,uint256)');
-const SOLD_TOPIC = ethers.id('Sold(address,uint256,address,address,uint256)');
-const CANCELLED_TOPIC = ethers.id('Cancelled(address,uint256,address)');
+// Event signatures matching the real QRCMarketplace contract
+const NFT_LISTED_TOPIC = ethers.id('NFTListed(address,uint256,address,uint256,uint8)');
+const NFT_SOLD_TOPIC = ethers.id('NFTSold(address,uint256,address,address,uint256)');
+const LISTING_CANCELLED_TOPIC = ethers.id('ListingCancelled(address,uint256,address)');
 const OFFER_MADE_TOPIC = ethers.id('OfferMade(address,uint256,address,uint256,uint256)');
 const OFFER_ACCEPTED_TOPIC = ethers.id('OfferAccepted(address,uint256,address,address,uint256)');
+const OFFER_CANCELLED_TOPIC = ethers.id('OfferCancelled(address,uint256,address)');
 
 const MARKETPLACE_ABI = [
-  'event Listed(address indexed collection, uint256 indexed tokenId, address indexed seller, uint256 price)',
-  'event Sold(address indexed collection, uint256 indexed tokenId, address seller, address buyer, uint256 price)',
-  'event Cancelled(address indexed collection, uint256 indexed tokenId, address indexed seller)',
-  'event OfferMade(address indexed collection, uint256 indexed tokenId, address indexed offerer, uint256 price, uint256 expiry)',
-  'event OfferAccepted(address indexed collection, uint256 indexed tokenId, address offerer, address seller, uint256 price)',
+  'event NFTListed(address indexed nftContract, uint256 indexed tokenId, address indexed seller, uint256 price, uint8 standard)',
+  'event NFTSold(address indexed nftContract, uint256 indexed tokenId, address seller, address indexed buyer, uint256 price)',
+  'event ListingCancelled(address indexed nftContract, uint256 indexed tokenId, address indexed seller)',
+  'event OfferMade(address indexed nftContract, uint256 indexed tokenId, address indexed offerer, uint256 amount, uint256 expiry)',
+  'event OfferAccepted(address indexed nftContract, uint256 indexed tokenId, address seller, address indexed offerer, uint256 amount)',
+  'event OfferCancelled(address indexed nftContract, uint256 indexed tokenId, address indexed offerer)',
 ];
 
 const iface = new ethers.Interface(MARKETPLACE_ABI);
 
 export function isMarketplaceEvent(log: ethers.Log, marketplaceAddress: string): boolean {
+  if (!marketplaceAddress) return false;
   return log.address.toLowerCase() === marketplaceAddress.toLowerCase();
 }
 
@@ -33,7 +37,7 @@ export async function handleMarketplaceEvent(
 ): Promise<void> {
   const topic = log.topics[0];
 
-  if (topic === LISTED_TOPIC) {
+  if (topic === NFT_LISTED_TOPIC) {
     const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
     if (!parsed) return;
     const [collection, tokenId, seller, price] = parsed.args;
@@ -51,7 +55,7 @@ export async function handleMarketplaceEvent(
     );
     await updateCollectionStats(collection);
 
-  } else if (topic === SOLD_TOPIC) {
+  } else if (topic === NFT_SOLD_TOPIC) {
     const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
     if (!parsed) return;
     const [collection, tokenId, seller, buyer, price] = parsed.args;
@@ -71,7 +75,7 @@ export async function handleMarketplaceEvent(
     await updateNFTSale(collection, tokenId.toString(), priceEth, timestamp);
     await updateCollectionStats(collection);
 
-  } else if (topic === CANCELLED_TOPIC) {
+  } else if (topic === LISTING_CANCELLED_TOPIC) {
     const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
     if (!parsed) return;
     const [collection, tokenId, seller] = parsed.args;
@@ -91,13 +95,13 @@ export async function handleMarketplaceEvent(
   } else if (topic === OFFER_MADE_TOPIC) {
     const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
     if (!parsed) return;
-    const [collection, tokenId, offerer, price, expiry] = parsed.args;
+    const [collection, tokenId, offerer, amount, expiry] = parsed.args;
 
     await insertOffer(
       collection,
       tokenId.toString(),
       offerer,
-      ethers.formatEther(price),
+      ethers.formatEther(amount),
       new Date(Number(expiry) * 1000),
       log.transactionHash,
     );
@@ -107,7 +111,7 @@ export async function handleMarketplaceEvent(
       tokenId.toString(),
       offerer,
       null,
-      ethers.formatEther(price),
+      ethers.formatEther(amount),
       log.transactionHash,
       log.blockNumber,
       timestamp,
@@ -116,8 +120,8 @@ export async function handleMarketplaceEvent(
   } else if (topic === OFFER_ACCEPTED_TOPIC) {
     const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
     if (!parsed) return;
-    const [collection, tokenId, offerer, seller, price] = parsed.args;
-    const priceEth = ethers.formatEther(price);
+    const [collection, tokenId, seller, offerer, amount] = parsed.args;
+    const priceEth = ethers.formatEther(amount);
 
     await updateOfferStatus(collection, tokenId.toString(), offerer, 'accepted');
     await insertActivity(
@@ -133,5 +137,23 @@ export async function handleMarketplaceEvent(
     );
     await updateNFTSale(collection, tokenId.toString(), priceEth, timestamp);
     await updateCollectionStats(collection);
+
+  } else if (topic === OFFER_CANCELLED_TOPIC) {
+    const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
+    if (!parsed) return;
+    const [collection, tokenId, offerer] = parsed.args;
+
+    await updateOfferStatus(collection, tokenId.toString(), offerer, 'cancelled');
+    await insertActivity(
+      'offer_cancelled',
+      collection,
+      tokenId.toString(),
+      offerer,
+      null,
+      null,
+      log.transactionHash,
+      log.blockNumber,
+      timestamp,
+    );
   }
 }

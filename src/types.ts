@@ -44,9 +44,13 @@ export type ActivityType =
   | 'cancelled'
   | 'offer_made'
   | 'offer_accepted'
+  | 'offer_cancelled'
   | 'auction_created'
   | 'bid_placed'
-  | 'auction_settled';
+  | 'auction_extended'
+  | 'auction_settled'
+  | 'auction_cancelled'
+  | 'collection_created';
 
 export interface Offer {
   id: number;
@@ -61,8 +65,11 @@ export interface Offer {
 
 export interface IndexerConfig {
   rpcUrl: string;
+  chainId: number;
   databaseUrl: string;
   marketplaceAddress: string;
   auctionAddress: string;
+  collectionFactoryAddress: string;
+  startBlock: number;
   port: number;
 }
