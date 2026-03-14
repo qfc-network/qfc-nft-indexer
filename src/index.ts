@@ -1,10 +1,15 @@
 import 'dotenv/config';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import { ethers } from 'ethers';
-import { closePool } from './db.js';
+import { getPool, closePool } from './db.js';
 import { startIndexer } from './indexer.js';
 import apiRouter from './api.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = parseInt(process.env.PORT || '3270', 10);
 const RPC_URL = process.env.RPC_URL || 'http://localhost:8545';
@@ -23,6 +28,17 @@ app.get('/health', (_req, res) => {
 });
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
+
+// Auto-migrate on startup
+const migrationPath = join(__dirname, '..', 'migrations', '001_init.sql');
+try {
+  const sql = readFileSync(migrationPath, 'utf-8');
+  await getPool().query(sql);
+  console.log('[migrate] schema ready');
+} catch (err: any) {
+  console.error('[migrate] failed:', err.message);
+  process.exit(1);
+}
 
 const server = app.listen(PORT, () => {
   console.log(`[api] listening on port ${PORT}`);
